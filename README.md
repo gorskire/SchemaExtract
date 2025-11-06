@@ -4,12 +4,21 @@ A lightweight .NET tool that extracts and documents SQL Server database schema s
 
 ## Purpose
 
-SchemaExtract connects to a SQL Server database and generates detailed documentation for each table, including:
+SchemaExtract connects to a SQL Server database and generates detailed documentation for database objects, including:
+
+**Tables:**
 - Column definitions (name, type, nullability, identity, defaults, computed columns)
 - Primary keys
 - Unique constraints
 - Foreign key relationships
 - Check constraints
+
+**Views:**
+- Complete view definitions with SQL code
+
+**Stored Procedures and Functions:**
+- Complete procedure/function definitions with SQL code
+- Supports scalar functions, table-valued functions, and stored procedures
 
 This structured output enables AI agents to quickly understand database schemas without querying the database directly.
 
@@ -48,19 +57,32 @@ This structured output enables AI agents to quickly understand database schemas 
 
 ## Output Structure
 
-The tool creates a folder for each table with the naming pattern `[SchemaName].[TableName]` containing a markdown file with complete schema details.
+The tool creates organized folders for each database object type with markdown documentation.
 
 Example output structure:
 ```
 Results/
-├── [dbo].[Users]/
-│   └── dbo.Users.md
-├── [dbo].[Orders]/
-│   └── dbo.Orders.md
-└── ...
+├── Tables/
+│   ├── [dbo].[Users]/
+│   │   └── dbo.Users.md
+│   └── [dbo].[Orders]/
+│       └── dbo.Orders.md
+├── Views/
+│   ├── [dbo].[vwActiveUsers]/
+│   │   └── dbo.vwActiveUsers.md
+│   └── [dbo].[vwOrderSummary]/
+│       └── dbo.vwOrderSummary.md
+├── Procedures/
+│   └── [dbo].[sp_GetUserOrders]/
+│       └── dbo.sp_GetUserOrders.md
+└── Functions/
+    └── [dbo].[fn_CalculateTotal]/
+        └── dbo.fn_CalculateTotal.md
 ```
 
 ## Sample Output
+
+### Table Documentation
 
 Each table documentation file includes:
 
@@ -93,6 +115,51 @@ Each table documentation file includes:
 ## Check Constraints
 
 - **CK_Users_Email**: `[Email] LIKE '%@%'`
+```
+
+### View Documentation
+
+Views include their complete SQL definition:
+
+```markdown
+# dbo.vwActiveUsers
+
+**Type:** View
+
+**Generated:** 2025-11-06 14:20:00 +00:00
+
+## Definition
+
+\```sql
+CREATE VIEW [dbo].[vwActiveUsers]
+AS
+SELECT u.UserId, u.Username, u.Email
+FROM Users u
+WHERE u.IsActive = 1
+\```
+```
+
+### Stored Procedure/Function Documentation
+
+Procedures and functions include their complete SQL definition with parameter information:
+
+```markdown
+# dbo.sp_GetUserOrders
+
+**Type:** Stored Procedure
+
+**Generated:** 2025-11-06 14:20:00 +00:00
+
+## Definition
+
+\```sql
+CREATE PROCEDURE [dbo].[sp_GetUserOrders]
+    @UserId INT
+AS
+BEGIN
+    SELECT * FROM Orders WHERE UserId = @UserId
+END
+\```
 ```
 
 ## Use Cases

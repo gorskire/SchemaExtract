@@ -8,6 +8,8 @@ static class Program
 {
     private record Config(string OutputFolder, string ConnectionString);
     private record TableRef(int ObjectId, string SchemaName, string TableName);
+    private record ViewRef(int ObjectId, string SchemaName, string ViewName, string Definition);
+    private record RoutineRef(int ObjectId, string SchemaName, string RoutineName, string RoutineType, string Definition);
     private record ColumnInfo(
         int ColumnId,
         string ColumnName,
@@ -48,15 +50,23 @@ static class Program
 
         Directory.CreateDirectory(config.OutputFolder);
 
+        // Clean output folder before extraction
+        if (Directory.Exists(config.OutputFolder))
+        {
+            foreach (var dir in Directory.GetDirectories(config.OutputFolder))
+                Directory.Delete(dir, true);
+            foreach (var file in Directory.GetFiles(config.OutputFolder))
+                File.Delete(file);
+        }
+
         using var conn = new SqlConnection(config.ConnectionString);
         await conn.OpenAsync();
 
         var tables = await GetTables(conn);
-
         foreach (var t in tables)
         {
             var dirName = $"[{t.SchemaName}].[{t.TableName}]";
-            var tableDir = Path.Combine(config.OutputFolder, dirName);
+            var tableDir = Path.Combine(config.OutputFolder, "Tables", dirName);
             Directory.CreateDirectory(tableDir);
 
             var details = await BuildTableReport(conn, t);
@@ -65,7 +75,132 @@ static class Program
             Console.WriteLine($"Wrote {fileName}");
         }
 
+        var views = await GetViews(conn);
+        foreach (var v in views)
+        {
+            var dirName = $"[{v.SchemaName}].[{v.ViewName}]";
+            var viewDir = Path.Combine(config.OutputFolder, "Views", dirName);
+            Directory.CreateDirectory(viewDir);
+
+            var details = BuildViewReport(v);
+            var fileName = Path.Combine(viewDir, $"{v.SchemaName}.{v.ViewName}.md");
+            await File.WriteAllTextAsync(fileName, details, new UTF8Encoding(false));
+            Console.WriteLine($"Wrote {fileName}");
+        }
+
+        var routines = await GetRoutines(conn);
+        foreach (var r in routines)
+        {
+            var dirName = $"[{r.SchemaName}].[{r.RoutineName}]";
+            var routineDir = Path.Combine(config.OutputFolder, r.RoutineType == "SQL_STORED_PROCEDURE" ? "Procedures" : "Functions", dirName);
+            Directory.CreateDirectory(routineDir);
+
+            var details = BuildRoutineReport(r);
+            var fileName = Path.Combine(routineDir, $"{r.SchemaName}.{r.RoutineName}.md");
+            await File.WriteAllTextAsync(fileName, details, new UTF8Encoding(false));
+            Console.WriteLine($"Wrote {fileName}");
+        }
+
+        // Generate summary file
+        await GenerateSummary(config.OutputFolder, tables, views, routines);
+
         Console.WriteLine("Done.");
+    }
+
+    private static async Task GenerateSummary(string outputFolder, List<TableRef> tables, List<ViewRef> views, List<RoutineRef> routines)
+    {
+        var sb = new StringBuilder();
+        var now = DateTimeOffset.Now;
+
+        sb.AppendLine("# Database Schema Summary");
+        sb.AppendLine();
+        sb.AppendLine($"**Generated:** {now:yyyy-MM-dd HH:mm:ss zzz}");
+        sb.AppendLine();
+        sb.AppendLine("## Overview");
+        sb.AppendLine();
+        sb.AppendLine($"- **Tables:** {tables.Count}");
+        sb.AppendLine($"- **Views:** {views.Count}");
+        sb.AppendLine($"- **Stored Procedures:** {routines.Count(r => r.RoutineType == "SQL_STORED_PROCEDURE")}");
+        sb.AppendLine($"- **Functions:** {routines.Count(r => r.RoutineType != "SQL_STORED_PROCEDURE")}");
+        sb.AppendLine();
+
+        // Tables
+        sb.AppendLine("## Tables");
+        sb.AppendLine();
+        foreach (var schemaGroup in tables.GroupBy(t => t.SchemaName).OrderBy(g => g.Key))
+        {
+            sb.AppendLine($"### {schemaGroup.Key}");
+            sb.AppendLine();
+            foreach (var table in schemaGroup.OrderBy(t => t.TableName))
+            {
+                sb.AppendLine($"- [{table.TableName}](Tables/[{table.SchemaName}].[{table.TableName}]/{table.SchemaName}.{table.TableName}.md)");
+            }
+            sb.AppendLine();
+        }
+
+        // Views
+        if (views.Count > 0)
+        {
+            sb.AppendLine("## Views");
+            sb.AppendLine();
+            foreach (var schemaGroup in views.GroupBy(v => v.SchemaName).OrderBy(g => g.Key))
+            {
+                sb.AppendLine($"### {schemaGroup.Key}");
+                sb.AppendLine();
+                foreach (var view in schemaGroup.OrderBy(v => v.ViewName))
+                {
+                    sb.AppendLine($"- [{view.ViewName}](Views/[{view.SchemaName}].[{view.ViewName}]/{view.SchemaName}.{view.ViewName}.md)");
+                }
+                sb.AppendLine();
+            }
+        }
+
+        // Stored Procedures
+        var procedures = routines.Where(r => r.RoutineType == "SQL_STORED_PROCEDURE").ToList();
+        if (procedures.Count > 0)
+        {
+            sb.AppendLine("## Stored Procedures");
+            sb.AppendLine();
+            foreach (var schemaGroup in procedures.GroupBy(p => p.SchemaName).OrderBy(g => g.Key))
+            {
+                sb.AppendLine($"### {schemaGroup.Key}");
+                sb.AppendLine();
+                foreach (var proc in schemaGroup.OrderBy(p => p.RoutineName))
+                {
+                    sb.AppendLine($"- [{proc.RoutineName}](Procedures/[{proc.SchemaName}].[{proc.RoutineName}]/{proc.SchemaName}.{proc.RoutineName}.md)");
+                }
+                sb.AppendLine();
+            }
+        }
+
+        // Functions
+        var functions = routines.Where(r => r.RoutineType != "SQL_STORED_PROCEDURE").ToList();
+        if (functions.Count > 0)
+        {
+            sb.AppendLine("## Functions");
+            sb.AppendLine();
+            foreach (var schemaGroup in functions.GroupBy(f => f.SchemaName).OrderBy(g => g.Key))
+            {
+                sb.AppendLine($"### {schemaGroup.Key}");
+                sb.AppendLine();
+                foreach (var func in schemaGroup.OrderBy(f => f.RoutineName))
+                {
+                    var typeName = func.RoutineType switch
+                    {
+                        "SQL_SCALAR_FUNCTION" => "Scalar Function",
+                        "SQL_INLINE_TABLE_VALUED_FUNCTION" => "Inline Table-Valued Function",
+                        "SQL_TABLE_VALUED_FUNCTION" => "Table-Valued Function",
+                        _ => func.RoutineType
+                    };
+                    sb.AppendLine($"- [{func.RoutineName}](Functions/[{func.SchemaName}].[{func.RoutineName}]/{func.SchemaName}.{func.RoutineName}.md) - *{typeName}*");
+                }
+                sb.AppendLine();
+            }
+        }
+
+        var summaryPath = Path.Combine(outputFolder, "summary.md");
+        await File.WriteAllTextAsync(summaryPath, sb.ToString(), new UTF8Encoding(false));
+        Console.WriteLine($"Wrote {summaryPath}");
     }
 
     private static Config? LoadConfig()
@@ -100,6 +235,61 @@ static class Program
         var list = new List<TableRef>();
         while (await rdr.ReadAsync())
             list.Add(new TableRef(rdr.GetInt32(0), rdr.GetString(1), rdr.GetString(2)));
+        return list;
+    }
+
+    private static async Task<List<ViewRef>> GetViews(SqlConnection conn)
+    {
+        const string sql = @"
+SELECT 
+    v.object_id, 
+    s.name AS SchemaName, 
+    v.name AS ViewName,
+    m.definition
+FROM sys.views v
+JOIN sys.schemas s ON s.schema_id = v.schema_id
+JOIN sys.sql_modules m ON m.object_id = v.object_id
+WHERE v.is_ms_shipped = 0
+ORDER BY s.name, v.name;";
+        
+        using var cmd = new SqlCommand(sql, conn);
+        using var rdr = await cmd.ExecuteReaderAsync();
+        var list = new List<ViewRef>();
+        while (await rdr.ReadAsync())
+            list.Add(new ViewRef(
+                rdr.GetInt32(0), 
+                rdr.GetString(1), 
+                rdr.GetString(2),
+                rdr.GetString(3)));
+        return list;
+    }
+
+    private static async Task<List<RoutineRef>> GetRoutines(SqlConnection conn)
+    {
+        const string sql = @"
+SELECT 
+    r.object_id,
+    s.name AS SchemaName,
+    r.name AS RoutineName,
+    r.type_desc AS RoutineType,
+    m.definition
+FROM sys.objects r
+JOIN sys.schemas s ON s.schema_id = r.schema_id
+JOIN sys.sql_modules m ON m.object_id = r.object_id
+WHERE r.type IN ('P', 'FN', 'IF', 'TF')
+  AND r.is_ms_shipped = 0
+ORDER BY r.type_desc, s.name, r.name;";
+        
+        using var cmd = new SqlCommand(sql, conn);
+        using var rdr = await cmd.ExecuteReaderAsync();
+        var list = new List<RoutineRef>();
+        while (await rdr.ReadAsync())
+            list.Add(new RoutineRef(
+                rdr.GetInt32(0),
+                rdr.GetString(1),
+                rdr.GetString(2),
+                rdr.GetString(3),
+                rdr.GetString(4)));
         return list;
     }
 
@@ -406,5 +596,54 @@ ORDER BY cc.name;";
             ));
         }
         return list;
+    }
+
+    private static string BuildViewReport(ViewRef v)
+    {
+        var sb = new StringBuilder();
+        var now = DateTimeOffset.Now;
+
+        sb.AppendLine($"# {v.SchemaName}.{v.ViewName}");
+        sb.AppendLine();
+        sb.AppendLine($"**Type:** View");
+        sb.AppendLine();
+        sb.AppendLine($"**Generated:** {now:yyyy-MM-dd HH:mm:ss zzz}");
+        sb.AppendLine();
+        sb.AppendLine("## Definition");
+        sb.AppendLine();
+        sb.AppendLine("```sql");
+        sb.AppendLine(v.Definition.Trim());
+        sb.AppendLine("```");
+
+        return sb.ToString();
+    }
+
+    private static string BuildRoutineReport(RoutineRef r)
+    {
+        var sb = new StringBuilder();
+        var now = DateTimeOffset.Now;
+        
+        var typeName = r.RoutineType switch
+        {
+            "SQL_STORED_PROCEDURE" => "Stored Procedure",
+            "SQL_SCALAR_FUNCTION" => "Scalar Function",
+            "SQL_INLINE_TABLE_VALUED_FUNCTION" => "Inline Table-Valued Function",
+            "SQL_TABLE_VALUED_FUNCTION" => "Table-Valued Function",
+            _ => r.RoutineType
+        };
+
+        sb.AppendLine($"# {r.SchemaName}.{r.RoutineName}");
+        sb.AppendLine();
+        sb.AppendLine($"**Type:** {typeName}");
+        sb.AppendLine();
+        sb.AppendLine($"**Generated:** {now:yyyy-MM-dd HH:mm:ss zzz}");
+        sb.AppendLine();
+        sb.AppendLine("## Definition");
+        sb.AppendLine();
+        sb.AppendLine("```sql");
+        sb.AppendLine(r.Definition.Trim());
+        sb.AppendLine("```");
+
+        return sb.ToString();
     }
 }
