@@ -60,7 +60,7 @@ static class Program
             Directory.CreateDirectory(tableDir);
 
             var details = await BuildTableReport(conn, t);
-            var fileName = Path.Combine(tableDir, $"{t.SchemaName}.{t.TableName}.txt");
+            var fileName = Path.Combine(tableDir, $"{t.SchemaName}.{t.TableName}.md");
             await File.WriteAllTextAsync(fileName, details, new UTF8Encoding(false));
             Console.WriteLine($"Wrote {fileName}");
         }
@@ -108,24 +108,37 @@ static class Program
         var sb = new StringBuilder();
         var now = DateTimeOffset.Now;
 
-        sb.AppendLine($"Table: [{t.SchemaName}].[{t.TableName}]");
-        sb.AppendLine($"Generated: {now:yyyy-MM-dd HH:mm:ss zzz}");
-        sb.AppendLine(new string('=', 72));
+        sb.AppendLine($"# {t.SchemaName}.{t.TableName}");
+        sb.AppendLine();
+        sb.AppendLine($"**Generated:** {now:yyyy-MM-dd HH:mm:ss zzz}");
+        sb.AppendLine();
 
         var columns = await GetColumns(conn, t.ObjectId);
-        sb.AppendLine("\nCOLUMNS\n-------");
+        sb.AppendLine("## Columns");
+        sb.AppendLine();
+        sb.AppendLine("| # | Column Name | Data Type | Nullable | Identity | Default | Computed |");
+        sb.AppendLine("|---|-------------|-----------|----------|----------|---------|----------|");
+        
         foreach (var c in columns.OrderBy(x => x.ColumnId))
         {
             var typeStr = RenderType(c);
-            var nullStr = c.IsNullable ? "NULL" : "NOT NULL";
-            var identityStr = c.IsIdentity ? " IDENTITY" : "";
-            var computedStr = c.IsComputed ? $" COMPUTED AS {c.ComputedDefinition}" : "";
-            var defaultStr = string.IsNullOrWhiteSpace(c.DefaultDefinition) ? "" : $" DEFAULT {c.DefaultDefinition}";
-            sb.AppendLine($"- {c.ColumnId:00}. [{c.ColumnName}] {typeStr} {nullStr}{identityStr}{defaultStr}{computedStr}");
+            var nullStr = c.IsNullable ? "✓" : "";
+            var identityStr = c.IsIdentity ? "✓" : "";
+            var computedStr = c.IsComputed ? c.ComputedDefinition ?? "" : "";
+            var defaultStr = c.DefaultDefinition ?? "";
+            
+            sb.AppendLine($"| {c.ColumnId} | `{c.ColumnName}` | `{typeStr}` | {nullStr} | {identityStr} | {EscapeMarkdown(defaultStr)} | {EscapeMarkdown(computedStr)} |");
         }
 
+        sb.AppendLine();
         sb.Append(await RenderKeysAndConstraints(conn, t));
         return sb.ToString();
+    }
+
+    private static string EscapeMarkdown(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        return text.Replace("|", "\\|").Replace("\n", " ").Replace("\r", "");
     }
 
     private static async Task<string> RenderKeysAndConstraints(SqlConnection conn, TableRef t)
@@ -133,31 +146,73 @@ static class Program
         var sb = new StringBuilder();
 
         var pk = await GetPrimaryKey(conn, t.ObjectId);
-        sb.AppendLine("\nPRIMARY KEY\n-----------");
-        sb.AppendLine(pk.Count == 0 ? "(none)" : string.Join("\n", pk.GroupBy(x => x.ConstraintName)
-            .Select(g => $"{g.Key}: {string.Join(", ", g.OrderBy(x => x.KeyOrdinal).Select(x => $"[{x.ColumnName}]"))}")));
+        sb.AppendLine("## Primary Key");
+        sb.AppendLine();
+        if (pk.Count == 0)
+        {
+            sb.AppendLine("*None*");
+        }
+        else
+        {
+            foreach (var g in pk.GroupBy(x => x.ConstraintName))
+            {
+                var cols = string.Join(", ", g.OrderBy(x => x.KeyOrdinal).Select(x => $"`{x.ColumnName}`"));
+                sb.AppendLine($"- **{g.Key}**: {cols}");
+            }
+        }
 
         var uqs = await GetUniqueConstraints(conn, t.ObjectId);
-        sb.AppendLine("\nUNIQUE CONSTRAINTS\n------------------");
-        sb.AppendLine(uqs.Count == 0 ? "(none)" : string.Join("\n", uqs.GroupBy(x => x.ConstraintName)
-            .Select(g => $"{g.Key}: {string.Join(", ", g.OrderBy(x => x.KeyOrdinal).Select(x => $"[{x.ColumnName}]"))}")));
+        sb.AppendLine();
+        sb.AppendLine("## Unique Constraints");
+        sb.AppendLine();
+        if (uqs.Count == 0)
+        {
+            sb.AppendLine("*None*");
+        }
+        else
+        {
+            foreach (var g in uqs.GroupBy(x => x.ConstraintName))
+            {
+                var cols = string.Join(", ", g.OrderBy(x => x.KeyOrdinal).Select(x => $"`{x.ColumnName}`"));
+                sb.AppendLine($"- **{g.Key}**: {cols}");
+            }
+        }
 
         var fks = await GetForeignKeys(conn, t.ObjectId);
-        sb.AppendLine("\nFOREIGN KEYS\n------------");
-        sb.AppendLine(fks.Count == 0 ? "(none)" : string.Join("\n", fks.GroupBy(x => x.ConstraintName)
-            .Select(g =>
+        sb.AppendLine();
+        sb.AppendLine("## Foreign Keys");
+        sb.AppendLine();
+        if (fks.Count == 0)
+        {
+            sb.AppendLine("*None*");
+        }
+        else
+        {
+            foreach (var g in fks.GroupBy(x => x.ConstraintName))
             {
                 var ordered = g.OrderBy(x => x.Ordinal).ToList();
-                var srcCols = string.Join(", ", ordered.Select(x => $"[{x.ParentColumn}]"));
-                var refTable = $"[{ordered[0].RefSchema}].[{ordered[0].RefTable}]";
-                var refCols = string.Join(", ", ordered.Select(x => $"[{x.RefColumn}]"));
-                return $"{g.Key}: ({srcCols}) -> {refTable} ({refCols})";
-            })));
+                var srcCols = string.Join(", ", ordered.Select(x => $"`{x.ParentColumn}`"));
+                var refTable = $"`{ordered[0].RefSchema}.{ordered[0].RefTable}`";
+                var refCols = string.Join(", ", ordered.Select(x => $"`{x.RefColumn}`"));
+                sb.AppendLine($"- **{g.Key}**: ({srcCols}) → {refTable} ({refCols})");
+            }
+        }
 
         var checks = await GetCheckConstraints(conn, t.ObjectId);
-        sb.AppendLine("\nCHECK CONSTRAINTS\n-----------------");
-        sb.AppendLine(checks.Count == 0 ? "(none)" : string.Join("\n", checks.OrderBy(x => x.ConstraintName)
-            .Select(c => $"{c.ConstraintName}: {c.Definition}")));
+        sb.AppendLine();
+        sb.AppendLine("## Check Constraints");
+        sb.AppendLine();
+        if (checks.Count == 0)
+        {
+            sb.AppendLine("*None*");
+        }
+        else
+        {
+            foreach (var c in checks.OrderBy(x => x.ConstraintName))
+            {
+                sb.AppendLine($"- **{c.ConstraintName}**: `{c.Definition}`");
+            }
+        }
 
         return sb.ToString();
     }

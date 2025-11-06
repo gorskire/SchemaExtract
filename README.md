@@ -48,15 +48,15 @@ This structured output enables AI agents to quickly understand database schemas 
 
 ## Output Structure
 
-The tool creates a folder for each table with the naming pattern `[SchemaName].[TableName]` containing a text file with complete schema details.
+The tool creates a folder for each table with the naming pattern `[SchemaName].[TableName]` containing a markdown file with complete schema details.
 
 Example output structure:
 ```
 Results/
 ├── [dbo].[Users]/
-│   └── dbo.Users.txt
+│   └── dbo.Users.md
 ├── [dbo].[Orders]/
-│   └── dbo.Orders.txt
+│   └── dbo.Orders.md
 └── ...
 ```
 
@@ -64,33 +64,35 @@ Results/
 
 Each table documentation file includes:
 
-```
-Table: [dbo].[Users]
-Generated: 2025-11-06 14:07:23 +00:00
-========================================================================
+```markdown
+# dbo.Users
 
-COLUMNS
--------
-- 01. [UserId] int NOT NULL IDENTITY
-- 02. [Username] nvarchar(50) NOT NULL
-- 03. [Email] nvarchar(255) NOT NULL
-- 04. [CreatedDate] datetime2 NOT NULL DEFAULT (getutcdate())
+**Generated:** 2025-11-06 14:20:00 +00:00
 
-PRIMARY KEY
------------
-PK_Users: [UserId]
+## Columns
 
-UNIQUE CONSTRAINTS
-------------------
-UQ_Users_Email: [Email]
+| # | Column Name | Data Type | Nullable | Identity | Default | Computed |
+|---|-------------|-----------|----------|----------|---------|----------|
+| 1 | `UserId` | `int` | | ✓ | | |
+| 2 | `Username` | `nvarchar(50)` | | | | |
+| 3 | `Email` | `nvarchar(255)` | | | | |
+| 4 | `CreatedDate` | `datetime2` | | | (getutcdate()) | |
 
-FOREIGN KEYS
-------------
-(none)
+## Primary Key
 
-CHECK CONSTRAINTS
------------------
-CK_Users_Email: [Email] LIKE '%@%'
+- **PK_Users**: `UserId`
+
+## Unique Constraints
+
+- **UQ_Users_Email**: `Email`
+
+## Foreign Keys
+
+*None*
+
+## Check Constraints
+
+- **CK_Users_Email**: `[Email] LIKE '%@%'`
 ```
 
 ## Use Cases
